@@ -1,5 +1,8 @@
 # Matter ESP32 Modbus Adapter
-The goal of this project is to provide a simple working Modbus adapter that can expose devices over Matter. It is designed for the ESP32 MCU.
+The goal of this project is to provide a simple working Modbus adapter that can expose devices over Matter. It is designed for the ESP32 MCU, so can be used with ESPHome, ESP-IDF and Arduino.
+
+> [!WARNING]
+> This is a work in progress. The code is working without issue, but the PCB (Revision A) has some design issues, which need addressing.
 
 # SDM120M - Electrical Sensor
 
