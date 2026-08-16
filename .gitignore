@@ -1,5 +1,5 @@
 /.vscode
 /.claude
-/build
-/managed_components
+build/
+managed_components/
 /.copperpilot

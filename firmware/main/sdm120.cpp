@@ -7,7 +7,9 @@
 extern "C" void matter_update_voltage(float voltage_v);
 extern "C" void matter_update_current(float current_a);
 extern "C" void matter_update_power(float power_w);
+#if CONFIG_ENABLE_STATUS_DISPLAY
 extern "C" void status_display_update(float voltage, float current, float power, float energy);
+#endif
 
 static const char *TAG = "SDM120M";
 
@@ -48,7 +50,9 @@ void sdm120_read_task(void *arg)
             ESP_LOGI(TAG, "Total Energy: %.2f kWh", energy);
         }
 
+#if CONFIG_ENABLE_STATUS_DISPLAY
         status_display_update(voltage, current, power, energy);
+#endif
 
         ESP_LOGI(TAG, "---");
         vTaskDelay(pdMS_TO_TICKS(5000));

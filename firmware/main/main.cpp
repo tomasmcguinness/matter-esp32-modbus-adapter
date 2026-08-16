@@ -14,7 +14,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#if CONFIG_ENABLE_STATUS_DISPLAY
 #include "status_display.h"
+#endif
 #include "electrical_power_measurement_delegate.h"
 
 static chip::app::Clusters::ElectricalPowerMeasurement::ElectricalPowerMeasurementDelegate EPMDelegate;
@@ -67,7 +69,9 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         break;
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
         ESP_LOGI(TAG, "Commissioning window closed");
+#if CONFIG_ENABLE_STATUS_DISPLAY
         StatusDisplayMgr().ClearCommissioningCode();
+#endif
         break;
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
     {
@@ -84,7 +88,9 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         if (GetQRCode(qrCode, payload) == CHIP_NO_ERROR)
         {
             ESP_LOGI(TAG, "Generated QR CODE [%d]: %s", qrCode.size(), qrCode.data());
+#if CONFIG_ENABLE_STATUS_DISPLAY
             StatusDisplayMgr().SetCommissioningCode(qrCode.data(), qrCode.size());
+#endif
         }
         else
         {
@@ -145,9 +151,11 @@ extern "C" void app_main()
 {
     nvs_flash_init();
 
+#if CONFIG_ENABLE_STATUS_DISPLAY
     StatusDisplayMgr().Init();
     StatusDisplayMgr().TurnOn();
     ESP_LOGI(TAG, "Display initialized");
+#endif
 
     modbus_uart_init();
     ESP_LOGI(TAG, "Modbus UART initialized");

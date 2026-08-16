@@ -1,0 +1,10 @@
+menu "Application Configuration"
+
+config ENABLE_STATUS_DISPLAY
+    bool "Enable status display (SSD1306 OLED)"
+    default n
+    help
+        Enable the I2C SSD1306 OLED status display.
+        Disable when running without display hardware.
+
+endmenu
