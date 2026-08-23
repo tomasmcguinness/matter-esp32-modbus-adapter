@@ -3,3 +3,6 @@
 build/
 managed_components/
 /.copperpilot
+hardware/~Modbus-Adapter.kicad_pcb.lck
+hardware/~Modbus-Adapter.kicad_pro.lck
+hardware/~Modbus-Adapter.kicad_sch.lck
