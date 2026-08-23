@@ -191,5 +191,10 @@ extern "C" void app_main()
         return;
     }
 
+#define MODBUS_LINK_TEST 1 // set to 1 to run the raw RS-485 bring-up test instead of normal polling
+#if MODBUS_LINK_TEST
+    modbus_start_tx_test();
+#else
     xTaskCreate(sdm120_read_task, "sdm120m_read", 4096, NULL, 5, NULL);
+#endif
 }
