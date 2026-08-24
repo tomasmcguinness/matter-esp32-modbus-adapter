@@ -3,7 +3,9 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_log.h"
+#include <string.h>
 
 // Revision A Board. TX GPIO22, RX GPIO23, DE/RE GPIO18. 9600 baud, 8N1, no flow control.
 
@@ -14,6 +16,7 @@
 #define MODBUS_SLAVE_ADDR 1
 
 #define RX_TEST_TIMEOUT_MS 2000
+#define LOOPBACK_TIMEOUT_MS 200
 
 // ESP-IDF's printf has no %b, so expand the byte into eight explicit bits.
 #define BYTE_TO_BINARY_FMT "%c%c%c%c%c%c%c%c"
@@ -42,13 +45,23 @@ static uint16_t crc16_modbus(uint8_t *data, int len)
     return crc;
 }
 
-static float bytes_to_float(uint8_t *bytes)
+static float bytes_to_float(const uint8_t *bytes)
 {
-    uint32_t val = (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
-    return *(float *)&val;
+    // Cast each byte before shifting: uint8_t promotes to int, so bytes[0] << 24
+    // shifts into the sign bit for any value >= 0x80.
+    uint32_t val = ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
+                   ((uint32_t)bytes[2] << 8) | (uint32_t)bytes[3];
+
+    // memcpy rather than a pointer cast; type-punning through *(float *)&val
+    // breaks strict aliasing and the optimiser is free to reorder around it.
+    float result;
+    memcpy(&result, &val, sizeof(result));
+    return result;
 }
 
-void modbus_uart_init(void)
+// Configures the UART and DE/RE pin. Pass a queue handle to receive driver
+// events (framing errors, breaks); pass NULL for plain byte-oriented use.
+static void modbus_uart_configure(QueueHandle_t *event_queue)
 {
     uart_config_t uart_config = {
         .baud_rate = 9600,
@@ -60,7 +73,7 @@ void modbus_uart_init(void)
 
     uart_param_config(MODBUS_UART, &uart_config);
     uart_set_pin(MODBUS_UART, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    uart_driver_install(MODBUS_UART, 256, 0, 0, NULL, 0);
+    uart_driver_install(MODBUS_UART, 256, 0, event_queue ? 20 : 0, event_queue, 0);
 
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << DE_RE_PIN),
@@ -73,17 +86,22 @@ void modbus_uart_init(void)
     gpio_set_level(DE_RE_PIN, 0); // Start in RX mode
 }
 
+void modbus_uart_init(void)
+{
+    modbus_uart_configure(NULL);
+}
+
 static void modbus_tx_test_task(void *arg)
 {
     gpio_set_level(DE_RE_PIN, 1); // hold driver enabled for the whole test
     vTaskDelay(pdMS_TO_TICKS(2));
 
-    uint8_t byte = 0x48; // 01010101 - easy to spot on a scope/logic analyzer
+    uint8_t byte = 0x48; // change freely - pick something easy to spot on a scope/logic analyzer
     while (1)
     {
         uart_write_bytes(MODBUS_UART, &byte, 1);
         uart_wait_tx_done(MODBUS_UART, pdMS_TO_TICKS(100));
-        ESP_LOGI(TAG, "TX 0x55");
+        ESP_LOGI(TAG, "TX 0x%02X (0b" BYTE_TO_BINARY_FMT ")", byte, BYTE_TO_BINARY(byte));
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
@@ -95,6 +113,13 @@ void modbus_start_tx_test(void)
 
 static void modbus_rx_test_task(void *arg)
 {
+    // Reinstall the driver with an event queue. uart_read_bytes silently drops
+    // framing errors, so a dead line and a garbled line look identical through
+    // it; the event queue tells them apart.
+    QueueHandle_t events = NULL;
+    uart_driver_delete(MODBUS_UART);
+    modbus_uart_configure(&events);
+
     gpio_set_level(DE_RE_PIN, 0); // hold the receiver enabled for the whole test
     vTaskDelay(pdMS_TO_TICKS(2));
     uart_flush_input(MODBUS_UART);
@@ -103,21 +128,60 @@ static void modbus_rx_test_task(void *arg)
 
     while (1)
     {
-        uint8_t byte = 0;
-        int len = uart_read_bytes(MODBUS_UART, &byte, 1, pdMS_TO_TICKS(RX_TEST_TIMEOUT_MS));
-
-        if (len == 1)
-        {
-            ESP_LOGI(TAG, "RX 0x%02X (0b" BYTE_TO_BINARY_FMT ")", byte, BYTE_TO_BINARY(byte));
-        }
-        else if (len == 0)
+        uart_event_t event;
+        if (!xQueueReceive(events, &event, pdMS_TO_TICKS(RX_TEST_TIMEOUT_MS)))
         {
             ESP_LOGW(TAG, "RX idle (no bytes in %d ms)", RX_TEST_TIMEOUT_MS);
+            continue;
         }
-        else
+
+        switch (event.type)
         {
-            ESP_LOGE(TAG, "RX error from uart_read_bytes: %d", len);
-            vTaskDelay(pdMS_TO_TICKS(RX_TEST_TIMEOUT_MS));
+        case UART_DATA:
+            for (size_t i = 0; i < event.size; i++)
+            {
+                uint8_t byte = 0;
+                if (uart_read_bytes(MODBUS_UART, &byte, 1, 0) == 1)
+                {
+                    ESP_LOGI(TAG, "RX 0x%02X (0b" BYTE_TO_BINARY_FMT ")", byte, BYTE_TO_BINARY(byte));
+                }
+            }
+            break;
+
+        case UART_FRAME_ERR:
+        {
+            ESP_LOGE(TAG, "RX FRAMING ERROR - signal is arriving but the stop bit is wrong.");
+            // Log whatever the driver kept, if anything. If the data bits are
+            // correct and only the stop bit failed, the sender is releasing the
+            // bus before the frame completes (auto-direction turnaround).
+            uint8_t byte = 0;
+            while (uart_read_bytes(MODBUS_UART, &byte, 1, 0) == 1)
+            {
+                ESP_LOGE(TAG, "  bad frame carried 0x%02X (0b" BYTE_TO_BINARY_FMT ")",
+                         byte, BYTE_TO_BINARY(byte));
+            }
+            break;
+        }
+
+        case UART_BREAK:
+            ESP_LOGE(TAG, "RX BREAK - line held low for a full frame.");
+            ESP_LOGE(TAG, "  Nobody is driving the bus. A terminated pair with no failsafe");
+            ESP_LOGE(TAG, "  bias sits at 0V differential, which the MAX485 cannot resolve.");
+            break;
+
+        case UART_PARITY_ERR:
+            ESP_LOGE(TAG, "RX PARITY ERROR - sender is not 8N1.");
+            break;
+
+        case UART_FIFO_OVF:
+        case UART_BUFFER_FULL:
+            ESP_LOGW(TAG, "RX overflow - data arriving faster than it is drained.");
+            uart_flush_input(MODBUS_UART);
+            break;
+
+        default:
+            ESP_LOGW(TAG, "RX event type %d", (int)event.type);
+            break;
         }
     }
 }
@@ -125,6 +189,51 @@ static void modbus_rx_test_task(void *arg)
 void modbus_start_rx_test(void)
 {
     xTaskCreate(modbus_rx_test_task, "modbus_rx_test", 2048, NULL, 5, NULL);
+}
+
+static void modbus_loopback_test_task(void *arg)
+{
+    ESP_LOGI(TAG, "Loopback test started. Jumper GPIO%d -> GPIO%d to bypass the",
+             (int)TXD_PIN, (int)RXD_PIN);
+    ESP_LOGI(TAG, "transceiver entirely; leave it wired to echo through the bus.");
+
+    uint8_t tx = 0x48;
+    while (1)
+    {
+        uart_flush_input(MODBUS_UART); // discard noise before we listen for our own byte
+
+        gpio_set_level(DE_RE_PIN, 1);
+        vTaskDelay(pdMS_TO_TICKS(2));
+        uart_write_bytes(MODBUS_UART, &tx, 1);
+        uart_wait_tx_done(MODBUS_UART, pdMS_TO_TICKS(100));
+        gpio_set_level(DE_RE_PIN, 0); // back to receive as soon as the stop bit is out
+
+        uint8_t rx = 0;
+        int len = uart_read_bytes(MODBUS_UART, &rx, 1, pdMS_TO_TICKS(LOOPBACK_TIMEOUT_MS));
+
+        if (len == 1 && rx == tx)
+        {
+            ESP_LOGI(TAG, "LOOPBACK OK  sent 0x%02X, got 0x%02X", tx, rx);
+        }
+        else if (len == 1)
+        {
+            ESP_LOGW(TAG, "LOOPBACK CORRUPT  sent 0x%02X (0b" BYTE_TO_BINARY_FMT "), "
+                          "got 0x%02X (0b" BYTE_TO_BINARY_FMT ")",
+                     tx, BYTE_TO_BINARY(tx), rx, BYTE_TO_BINARY(rx));
+        }
+        else
+        {
+            ESP_LOGE(TAG, "LOOPBACK FAIL  sent 0x%02X, nothing came back in %d ms",
+                     tx, LOOPBACK_TIMEOUT_MS);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+void modbus_start_loopback_test(void)
+{
+    xTaskCreate(modbus_loopback_test_task, "modbus_loopback", 2048, NULL, 5, NULL);
 }
 
 esp_err_t modbus_read_float_register(uint16_t reg_addr, float *result)
