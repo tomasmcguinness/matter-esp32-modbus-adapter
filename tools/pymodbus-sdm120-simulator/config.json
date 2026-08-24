@@ -1,0 +1,64 @@
+{
+    "server_list": {
+        "sdm120": {
+            "comm": "serial",
+            "port": "COM28",
+            "baudrate": 9600,
+            "bytesize": 8,
+            "parity": "N",
+            "stopbits": 1,
+            "timeout": 3,
+            "reconnect_delay": 2,
+            "framer": "rtu",
+            "identity": {
+                "VendorName": "pymodbus",
+                "ProductCode": "SDM120M-SIM",
+                "VendorUrl": "https://github.com/pymodbus-dev/pymodbus/",
+                "ProductName": "SDM120M Simulator",
+                "ModelName": "SDM120M",
+                "MajorMinorRevision": "1.0.0"
+            }
+        }
+    },
+    "device_list": {
+        "sdm120": {
+            "setup": {
+                "di size": 0,
+                "co size": 0,
+                "ir size": 30,
+                "hr size": 30,
+                "shared blocks": true,
+                "type exception": true,
+                "defaults": {
+                    "value": {
+                        "bits": 0,
+                        "uint16": 0,
+                        "uint32": 0,
+                        "float32": 0.0,
+                        "string": " "
+                    },
+                    "action": {
+                        "bits": null,
+                        "uint16": null,
+                        "uint32": null,
+                        "float32": null,
+                        "string": null
+                    }
+                }
+            },
+            "invalid": [],
+            "write": [],
+            "bits": [],
+            "uint16": [],
+            "uint32": [],
+            "float32": [
+                {"addr": [0, 1], "value": 230.5},
+                {"addr": [6, 7], "value": 1.23},
+                {"addr": [12, 13], "value": 283.2},
+                {"addr": [26, 27], "value": 12.34}
+            ],
+            "string": [],
+            "repeat": []
+        }
+    }
+}
