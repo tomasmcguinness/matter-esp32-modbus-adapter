@@ -5,11 +5,23 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 
+// Revision A Board. TX GPIO22, RX GPIO23, DE/RE GPIO18. 9600 baud, 8N1, no flow control.
+
 #define MODBUS_UART     UART_NUM_1
-#define TXD_PIN         ((gpio_num_t)16)
-#define RXD_PIN         ((gpio_num_t)17)
-#define DE_RE_PIN       ((gpio_num_t)21)
+#define TXD_PIN         ((gpio_num_t)22)
+#define RXD_PIN         ((gpio_num_t)23)
+#define DE_RE_PIN       ((gpio_num_t)18)
 #define MODBUS_SLAVE_ADDR 1
+
+#define RX_TEST_TIMEOUT_MS 2000
+
+// ESP-IDF's printf has no %b, so expand the byte into eight explicit bits.
+#define BYTE_TO_BINARY_FMT "%c%c%c%c%c%c%c%c"
+#define BYTE_TO_BINARY(b)                               \
+    ((b) & 0x80 ? '1' : '0'), ((b) & 0x40 ? '1' : '0'), \
+    ((b) & 0x20 ? '1' : '0'), ((b) & 0x10 ? '1' : '0'), \
+    ((b) & 0x08 ? '1' : '0'), ((b) & 0x04 ? '1' : '0'), \
+    ((b) & 0x02 ? '1' : '0'), ((b) & 0x01 ? '1' : '0')
 
 static const char *TAG = "Modbus";
 
@@ -61,6 +73,60 @@ void modbus_uart_init(void)
     gpio_set_level(DE_RE_PIN, 0); // Start in RX mode
 }
 
+static void modbus_tx_test_task(void *arg)
+{
+    gpio_set_level(DE_RE_PIN, 1); // hold driver enabled for the whole test
+    vTaskDelay(pdMS_TO_TICKS(2));
+
+    uint8_t byte = 0x48; // 01010101 - easy to spot on a scope/logic analyzer
+    while (1)
+    {
+        uart_write_bytes(MODBUS_UART, &byte, 1);
+        uart_wait_tx_done(MODBUS_UART, pdMS_TO_TICKS(100));
+        ESP_LOGI(TAG, "TX 0x55");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+void modbus_start_tx_test(void)
+{
+    xTaskCreate(modbus_tx_test_task, "modbus_tx_test", 2048, NULL, 5, NULL);
+}
+
+static void modbus_rx_test_task(void *arg)
+{
+    gpio_set_level(DE_RE_PIN, 0); // hold the receiver enabled for the whole test
+    vTaskDelay(pdMS_TO_TICKS(2));
+    uart_flush_input(MODBUS_UART);
+
+    ESP_LOGI(TAG, "RX test started, listening on UART%d", MODBUS_UART);
+
+    while (1)
+    {
+        uint8_t byte = 0;
+        int len = uart_read_bytes(MODBUS_UART, &byte, 1, pdMS_TO_TICKS(RX_TEST_TIMEOUT_MS));
+
+        if (len == 1)
+        {
+            ESP_LOGI(TAG, "RX 0x%02X (0b" BYTE_TO_BINARY_FMT ")", byte, BYTE_TO_BINARY(byte));
+        }
+        else if (len == 0)
+        {
+            ESP_LOGW(TAG, "RX idle (no bytes in %d ms)", RX_TEST_TIMEOUT_MS);
+        }
+        else
+        {
+            ESP_LOGE(TAG, "RX error from uart_read_bytes: %d", len);
+            vTaskDelay(pdMS_TO_TICKS(RX_TEST_TIMEOUT_MS));
+        }
+    }
+}
+
+void modbus_start_rx_test(void)
+{
+    xTaskCreate(modbus_rx_test_task, "modbus_rx_test", 2048, NULL, 5, NULL);
+}
+
 esp_err_t modbus_read_float_register(uint16_t reg_addr, float *result)
 {
     uart_flush_input(MODBUS_UART);
@@ -78,6 +144,10 @@ esp_err_t modbus_read_float_register(uint16_t reg_addr, float *result)
     request[6] = crc & 0xFF;
     request[7] = (crc >> 8) & 0xFF;
 
+    ESP_LOGI(TAG, "Requesting reg 0x%04X", reg_addr);
+    ESP_LOG_BUFFER_HEX(TAG, request, sizeof(request));
+
+    ESP_LOGD(TAG, "DE/RE -> TX");
     gpio_set_level(DE_RE_PIN, 1);
     vTaskDelay(pdMS_TO_TICKS(2));
 
@@ -86,11 +156,18 @@ esp_err_t modbus_read_float_register(uint16_t reg_addr, float *result)
 
     vTaskDelay(pdMS_TO_TICKS(5));
 
+    ESP_LOGD(TAG, "DE/RE -> RX");
     gpio_set_level(DE_RE_PIN, 0);
     vTaskDelay(pdMS_TO_TICKS(2));
 
     uint8_t response[9];
     int len = uart_read_bytes(MODBUS_UART, response, 9, pdMS_TO_TICKS(1000));
+
+    if (len > 0)
+    {
+        ESP_LOGI(TAG, "Received %d bytes", len);
+        ESP_LOG_BUFFER_HEX(TAG, response, len);
+    }
 
     if (len != 9)
     {
@@ -108,5 +185,6 @@ esp_err_t modbus_read_float_register(uint16_t reg_addr, float *result)
     }
 
     *result = bytes_to_float(&response[3]);
+    ESP_LOGI(TAG, "reg 0x%04X = %f", reg_addr, *result);
     return ESP_OK;
 }

@@ -32,6 +32,10 @@ using namespace chip::app::Clusters;
 
 static uint16_t electrical_sensor_endpoint_id = 0;
 
+// RS-485 bring-up tests. 0 = off (normal SDM120M polling), 1 = transmit one
+// byte repeatedly, 2 = receive and log bytes.
+#define MODBUS_LINK_TEST 1
+
 #define ABORT_APP_ON_FAILURE(x, ...)               \
     do                                             \
     {                                              \
@@ -191,5 +195,11 @@ extern "C" void app_main()
         return;
     }
 
+#if MODBUS_LINK_TEST == 1
+    modbus_start_tx_test();
+#elif MODBUS_LINK_TEST == 2
+    modbus_start_rx_test();
+#else
     xTaskCreate(sdm120_read_task, "sdm120m_read", 4096, NULL, 5, NULL);
+#endif
 }

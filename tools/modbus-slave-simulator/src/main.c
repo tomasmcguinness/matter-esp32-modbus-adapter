@@ -6,8 +6,8 @@
 #include "esp_log.h"
 
 #define MODBUS_UART   UART_NUM_1
-#define TXD_PIN       ((gpio_num_t)16)  // D6 on XIAO ESP32-C6
-#define RXD_PIN       ((gpio_num_t)17)  // D7 on XIAO ESP32-C6
+#define TXD_PIN       ((gpio_num_t)18)  // D9 on XIAO ESP32-C6
+#define RXD_PIN       ((gpio_num_t)20)  // D10 on XIAO ESP32-C6
 #define DE_RE_PIN     ((gpio_num_t)2)   // D2 on XIAO ESP32-C6 — tie MAX485 DE and RE together
 #define SLAVE_ADDR    1
 
@@ -62,11 +62,20 @@ static void modbus_slave_task(void *arg)
     uint8_t req[8];
     while (1) {
         int len = uart_read_bytes(MODBUS_UART, req, sizeof(req), pdMS_TO_TICKS(1000));
-        if (len != 8)
+        if (len <= 0)
             continue;
 
-        if (req[0] != SLAVE_ADDR || req[1] != 0x04)
+        ESP_LOG_BUFFER_HEX(TAG, req, len);
+
+        if (len != 8) {
+            ESP_LOGW(TAG, "Unexpected frame length %d", len);
             continue;
+        }
+
+        if (req[0] != SLAVE_ADDR || req[1] != 0x04) {
+            ESP_LOGW(TAG, "Ignoring frame addr=%d fc=0x%02X", req[0], req[1]);
+            continue;
+        }
 
         uint16_t req_crc = crc16(req, 6);
         uint16_t got_crc = req[6] | (req[7] << 8);
@@ -113,6 +122,14 @@ static void modbus_slave_task(void *arg)
     }
 }
 
+static void heartbeat_task(void *arg)
+{
+    while (1) {
+        ESP_LOGI(TAG, "alive");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
 void app_main(void)
 {
     uart_config_t uart_cfg = {
@@ -138,4 +155,5 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Modbus slave simulator ready (addr=%d, 9600 8N1)", SLAVE_ADDR);
     xTaskCreate(modbus_slave_task, "modbus_slave", 4096, NULL, 5, NULL);
+    xTaskCreate(heartbeat_task, "heartbeat", 2048, NULL, 1, NULL);
 }
