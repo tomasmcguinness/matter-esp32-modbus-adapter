@@ -1,5 +1,6 @@
 #include "sdm120.h"
 #include "modbus.h"
+#include "status_led.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -22,6 +23,8 @@ void sdm120_read_task(void *arg)
         float voltage = 0, current = 0, power = 0, energy = 0;
 
         ESP_LOGI(TAG, "Reading SDM120M...");
+
+        status_led_flash();
 
         if (modbus_read_float_register(0, &voltage) == ESP_OK)
         {

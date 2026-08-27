@@ -10,6 +10,7 @@
 
 #include "modbus.h"
 #include "sdm120.h"
+#include "status_led.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -48,6 +49,11 @@ static uint16_t electrical_sensor_endpoint_id = 0;
         }                                          \
     } while (0)
 
+static bool is_commissioned()
+{
+    return chip::Server::GetInstance().GetFabricTable().FabricCount() > 0;
+}
+
 static void open_commissioning_window_if_necessary()
 {
     VerifyOrReturn(chip::Server::GetInstance().GetFabricTable().FabricCount() == 0);
@@ -71,9 +77,21 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     {
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
         ESP_LOGI(TAG, "Commissioning complete");
+        status_led_set_state(STATUS_LED_OPERATIONAL);
+        break;
+    case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
+        ESP_LOGI(TAG, "Commissioning session started");
+        status_led_set_state(STATUS_LED_PAIRING);
+        break;
+    case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
+        // Also fires when a pairing attempt is abandoned or fails, in which
+        // case the window is still open and the device is pairable again.
+        ESP_LOGI(TAG, "Commissioning session stopped");
+        status_led_set_state(is_commissioned() ? STATUS_LED_OPERATIONAL : STATUS_LED_READY_TO_PAIR);
         break;
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
         ESP_LOGI(TAG, "Commissioning window closed");
+        status_led_set_state(is_commissioned() ? STATUS_LED_OPERATIONAL : STATUS_LED_OFF);
 #if CONFIG_ENABLE_STATUS_DISPLAY
         StatusDisplayMgr().ClearCommissioningCode();
 #endif
@@ -81,6 +99,8 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
     {
         ESP_LOGI(TAG, "Commissioning window opened");
+
+        status_led_set_state(STATUS_LED_READY_TO_PAIR);
 
         chip::RendezvousInformationFlags rendezvousFlags = chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE);
 
@@ -155,6 +175,8 @@ static esp_err_t app_attribute_update_cb(attribute::callback_type_t type,
 extern "C" void app_main()
 {
     nvs_flash_init();
+
+    status_led_init();
 
 #if CONFIG_ENABLE_STATUS_DISPLAY
     StatusDisplayMgr().Init();

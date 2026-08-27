@@ -4,7 +4,7 @@ else()
     set(DISPLAY_SRCS "")
 endif()
 
-idf_component_register(SRCS "sdm120.cpp" "modbus.cpp" "electrical_power_measurement_delegate.cpp" ${DISPLAY_SRCS} "main.cpp"
+idf_component_register(SRCS "sdm120.cpp" "modbus.cpp" "status_led.cpp" "electrical_power_measurement_delegate.cpp" ${DISPLAY_SRCS} "main.cpp"
                     INCLUDE_DIRS ".")
 
 target_compile_options(${COMPONENT_LIB} PRIVATE "-DCHIP_HAVE_CONFIG_H")
